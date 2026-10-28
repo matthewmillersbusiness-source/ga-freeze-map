@@ -1,0 +1,41 @@
+name: Update forecast and publish
+
+on:
+  schedule:
+    - cron: "0 10 * * *"   # every day 10:00 UTC = 6am Eastern (5am in winter)
+  push:
+    branches: [main]       # also publish whenever you push changes
+  workflow_dispatch:       # adds a "Run workflow" button for manual runs
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch fresh forecast
+        run: python3 freeze.py
+      - name: Save the new data to the repo
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/
+          git commit -m "Daily forecast update" || echo "No changes"
+          git push
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: .
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

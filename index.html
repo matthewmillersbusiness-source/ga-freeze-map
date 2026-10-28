@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Georgia Freeze Map</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  :root {
+    --bg: #0b1230;
+    --panel: #111a3d;
+    --inset: #0b1230;
+    --line: #22305e;
+    --text: #ffffff;
+    --muted: #9aa8c7;
+    --accent: #2f7bff;
+    --ice: #7fe3ff;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.45 "Plus Jakarta Sans", system-ui, -apple-system, sans-serif; color: var(--text); background: var(--bg); }
+  .app { display: grid; grid-template-columns: 360px 1fr; height: 100vh; }
+
+  aside { background: var(--panel); border-right: 1px solid var(--line); padding: 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 14px; }
+  h1 { font-size: 22px; font-weight: 800; margin: 0; }
+  .sub { color: var(--muted); font-size: 13px; margin: 2px 0 0; }
+
+  .filters { background: var(--inset); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; display: grid; gap: 12px; }
+  .filters label { display: flex; justify-content: space-between; color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; margin-bottom: 6px; }
+  .filters label b { color: var(--text); font-size: 13px; letter-spacing: 0; }
+  select { width: 100%; background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 8px; font: inherit; font-weight: 600; }
+  input[type=range] { width: 100%; accent-color: var(--accent); }
+  select:focus-visible, input:focus-visible, li:focus-visible { outline: 2px solid var(--ice); outline-offset: 2px; }
+
+  .banner { padding: 10px 12px; border-radius: 10px; font-size: 13px; background: rgba(47, 123, 255, .14); border: 1px solid rgba(47, 123, 255, .35); }
+  .banner.alert { background: rgba(127, 227, 255, .12); border-color: var(--ice); }
+
+  h2 { font-size: 15px; margin: 4px 0 0; }
+  ol { list-style: none; margin: 0; padding: 0; }
+  li { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 9px 6px; border-bottom: 1px solid var(--line); cursor: pointer; border-radius: 8px; }
+  li:hover { background: rgba(255, 255, 255, .04); }
+  .rank { width: 28px; height: 28px; border-radius: 8px; background: var(--inset); display: grid; place-items: center; font-weight: 700; font-size: 12px; color: var(--muted); }
+  li:nth-child(-n+3) .rank { background: var(--accent); color: #fff; }
+  .name { font-weight: 600; }
+  .meta { color: var(--muted); font-size: 12px; }
+  .low { font-size: 17px; font-weight: 800; font-variant-numeric: tabular-nums; }
+
+  #map { height: 100%; background: var(--bg); }
+  .leaflet-container { font-family: inherit; background: var(--bg); }
+  .leaflet-bar a { background: var(--panel); color: #fff; border-bottom-color: var(--line); }
+  .leaflet-popup-content-wrapper, .leaflet-popup-tip { background: var(--panel); color: #fff; }
+  .legend { background: rgba(17, 26, 61, .92); padding: 10px 12px; border-radius: 10px; font-size: 12px; line-height: 20px; color: var(--muted); border: 1px solid var(--line); }
+  .legend i { display: inline-block; width: 12px; height: 12px; border-radius: 3px; margin-right: 8px; vertical-align: -1px; }
+
+  @media (max-width: 760px) {
+    .app { grid-template-columns: 1fr; height: auto; }
+    #map { height: 60vh; order: -1; }
+    aside { border-right: 0; }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <aside>
+    <div>
+      <h1>Georgia Freeze Map</h1>
+      <p class="sub">Where pipes burst first. NWS forecast lows for all 159 counties. <span id="updated"></span></p>
+    </div>
+
+    <div class="filters">
+      <div>
+        <label for="nights">Nights ahead</label>
+        <select id="nights">
+          <option value="1">Tonight</option><option value="2">2 nights</option><option value="3">3 nights</option>
+          <option value="5">5 nights</option><option value="7" selected>7 nights</option>
+        </select>
+      </div>
+      <div>
+        <label for="radius">Service area</label>
+        <select id="radius">
+          <option value="0">All of Georgia</option><option value="25">Within 25 mi of Athens</option>
+          <option value="50" selected>Within 50 mi of Athens</option><option value="75">Within 75 mi of Athens</option>
+        </select>
+      </div>
+      <div>
+        <label for="thresh">Low at or below <b><span id="threshVal">32</span>°F</b></label>
+        <input type="range" id="thresh" min="20" max="50" step="1" value="32">
+      </div>
+    </div>
+
+    <div id="banner" class="banner">Loading forecast…</div>
+    <h2>Knock list</h2>
+    <ol id="list"></ol>
+  </aside>
+  <div id="map"></div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const map = L.map("map", { zoomSnap: 0.25, attributionControl: false }).setView([32.7, -83.4], 7);
+
+// Color coded: brighter = colder
+const SCALE = [[20, "#ffffff", "≤ 20° severe"], [28, "#a5f3fc", "≤ 28° hard freeze"], [32, "#22d3ee", "≤ 32° freeze"],
+               [40, "#1e90ff", "≤ 40° cold"], [45, "#3a4fc4", "≤ 45° chilly"], [50, "#2e2f7a", "≤ 50° cool"],
+               [999, "#1a1f3d", "warmer"]];
+function color(low) { return SCALE.find(([max]) => low <= max)[1]; }
+
+const legend = L.control({ position: "bottomright" });
+legend.onAdd = () => {
+  const d = L.DomUtil.create("div", "legend");
+  d.innerHTML = SCALE.map(([, c, t]) => `<i style="background:${c}"></i>${t}`).join("<br>");
+  return d;
+};
+legend.addTo(map);
+
+let forecast, layer;
+const HOME = [33.9519, -83.3576];  // Athens, GA
+
+// Straight-line miles from Athens to a county's center
+function miles(lat, lon) {
+  const r = d => d * Math.PI / 180;
+  const a = Math.sin(r(lat - HOME[0]) / 2) ** 2 +
+            Math.cos(r(HOME[0])) * Math.cos(r(lat)) * Math.sin(r(lon - HOME[1]) / 2) ** 2;
+  return 3959 * 2 * Math.asin(Math.sqrt(a));
+}
+const byFips = {};
+
+// For one county: coldest low, nights at/below threshold, and a severity score
+function stats(c, nights, thresh) {
+  const n = c.nights.slice(0, nights);
+  const cold = n.filter(x => x.low <= thresh);
+  const min = Math.min(...n.map(x => x.low));
+  const coldest = n.find(x => x.low === min);
+  // Score: how far below the threshold each cold night goes, plus a bonus for hard freezes
+  const score = cold.reduce((s, x) => s + (thresh - x.low + 1) + (x.low <= 28 ? 5 : 0), 0);
+  return { min, coldest, count: cold.length, score };
+}
+
+function render() {
+  const nights = +document.getElementById("nights").value;
+  const thresh = +document.getElementById("thresh").value;
+  const radius = +document.getElementById("radius").value;
+  document.getElementById("threshVal").textContent = thresh;
+
+  const all = forecast.counties.map(c => ({ c, ...stats(c, nights, thresh), inArea: !radius || miles(c.lat, c.lon) <= radius }));
+  all.forEach(r => byFips[r.c.fips] = r);
+  const rows = all.filter(r => r.inArea);
+
+  // Counties outside the service area fade out
+  layer.setStyle(f => ({ fillColor: color(byFips[f.id].min), fillOpacity: byFips[f.id].inArea ? 0.95 : 0.12, color: "#0b1230", weight: 0.8 }));
+
+  // Rank: counties that hit the threshold by score; if none do, the coldest counties
+  let ranked = rows.filter(r => r.count > 0).sort((a, b) => b.score - a.score || a.min - b.min);
+  const banner = document.getElementById("banner");
+  const span = (nights === 1 ? "tonight" : `in the next ${nights} nights`) + (radius ? ` within ${radius} mi of Athens` : "");
+  if (ranked.length) {
+    banner.className = "banner alert";
+    banner.textContent = `${ranked.length} counties reach ${thresh}°F or colder ${span}.`;
+  } else {
+    banner.className = "banner";
+    banner.textContent = `No county reaches ${thresh}°F ${span}. Showing the coldest counties instead.`;
+    ranked = [...rows].sort((a, b) => a.min - b.min).slice(0, 15);
+  }
+
+  document.getElementById("list").innerHTML = ranked.slice(0, 25).map((r, i) => `
+    <li data-fips="${r.c.fips}" tabindex="0">
+      <span class="rank">${i + 1}</span>
+      <div><div class="name">${r.c.name} County</div>
+        <div class="meta">${r.count ? `${r.count} night${r.count > 1 ? "s" : ""} ≤ ${thresh}° · ` : ""}coldest ${r.coldest.name}</div></div>
+      <span class="low" style="color:${color(r.min)}">${r.min}°</span>
+    </li>`).join("");
+}
+
+function focusCounty(fips) {
+  layer.eachLayer(l => { if (l.feature.id === fips) { map.fitBounds(l.getBounds(), { maxZoom: 9 }); l.openPopup(); } });
+}
+const list = document.getElementById("list");
+list.addEventListener("click", e => { const li = e.target.closest("li"); if (li) focusCounty(li.dataset.fips); });
+list.addEventListener("keydown", e => { const li = e.target.closest("li"); if (li && e.key === "Enter") focusCounty(li.dataset.fips); });
+document.getElementById("nights").addEventListener("change", render);
+// Zoom the map to whatever service area is selected
+function fitArea() {
+  const shown = [];
+  layer.eachLayer(l => { if (byFips[l.feature.id].inArea) shown.push(l); });
+  map.fitBounds(L.featureGroup(shown).getBounds(), { padding: [20, 20] });
+}
+document.getElementById("radius").addEventListener("change", () => { render(); fitArea(); });
+document.getElementById("thresh").addEventListener("input", render);
+
+Promise.all([fetch("data/ga_counties.geojson").then(r => r.json()), fetch("data/freeze.json").then(r => r.json())])
+  .then(([shapes, f]) => {
+    forecast = f;
+    document.getElementById("updated").textContent = "Updated " +
+      new Date(f.updated).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) + ".";
+    const ok = new Set(f.counties.map(c => c.fips));
+    layer = L.geoJSON({ ...shapes, features: shapes.features.filter(x => ok.has(x.id)) }, {
+      onEachFeature: (feat, l) => {
+        l.bindPopup(() => {
+          const r = byFips[feat.id];
+          return `<b>${r.c.name} County</b><br>` + r.c.nights.map(n => `${n.name}: ${n.low}°F`).join("<br>");
+        });
+        l.on("mouseover", () => l.setStyle({ weight: 2, color: "#ffffff" }));
+        l.on("mouseout", () => l.setStyle({ weight: 0.8, color: "#0b1230" }));
+      }
+    }).addTo(map);
+    render();
+    fitArea();
+  })
+  .catch(err => {
+    document.getElementById("banner").textContent = "Couldn't load the forecast data. Run python3 freeze.py, then reload.";
+    console.error(err);
+  });
+</script>
+</body>
+</html>
